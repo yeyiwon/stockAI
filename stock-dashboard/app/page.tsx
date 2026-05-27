@@ -28,7 +28,12 @@ interface NewsResult {
 interface Suggestion {
   회사명: string;
   종목코드: string;
+  
 }
+
+const API_BASE_URL = 'http://127.0.0.1:8000';
+
+
 export default function Home() {
   const [ticker, setTicker] = useState<string>('');
   const [result, setResult] = useState<StockResult | null>(null);
@@ -92,7 +97,7 @@ const handleChartScroll = (e: React.UIEvent<HTMLDivElement>) => {
     setSelectedIndex(-1);
     if (val.length > 0) {
       try {
-        const res = await fetch(`http://127.0.0.1:8000/search?query=${val}`);
+        const res = await fetch(`${API_BASE_URL}/search?query=${val}`);
         const data = await res.json();
         setSuggestions(data.suggestions || []);
       } catch (e) { console.error("검색 실패", e); }
@@ -118,8 +123,8 @@ const handleAnalyze = async (name: string): Promise<void> => {
 
   try {
     const [chartRes, newsRes] = await Promise.all([
-      fetch(`http://127.0.0.1:8000/analyze?name=${encodeURIComponent(name)}`),
-      fetch(`http://127.0.0.1:8000/news?name=${encodeURIComponent(name)}`)
+      fetch(`${API_BASE_URL}/analyze?name=${encodeURIComponent(name)}`),
+      fetch(`${API_BASE_URL}/news?name=${encodeURIComponent(name)}`)
     ]);
 
     if (!chartRes.ok || !newsRes.ok) throw new Error("데이터 호출 실패");
@@ -155,7 +160,7 @@ const handleAnalyze = async (name: string): Promise<void> => {
     setIsLoadingChat(true);
   
     try {
-      const res = await fetch(`http://127.0.0.1:8000/chat`, {
+      const res = await fetch(`${API_BASE_URL}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: result.ticker, question: chatInput }),

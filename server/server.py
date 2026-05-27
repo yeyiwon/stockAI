@@ -198,3 +198,10 @@ def chat_with_ai(data: ChatRequest):
     
     answer = get_ai_response(data.name, context)
     return {"answer": answer}
+
+# 파일 맨 마지막에 추가
+if __name__ == "__main__":
+    import uvicorn
+    # 환경 변수 PORT를 읽어오고, 없으면 8000번 사용
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

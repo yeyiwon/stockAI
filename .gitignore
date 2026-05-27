@@ -1,0 +1,13 @@
+# 파이썬 관련
+__pycache__/
+*.pyc
+
+# 환경 변수 및 설정
+.env
+.venv/
+env/
+
+# Next.js 관련
+node_modules/
+.next/
+out/

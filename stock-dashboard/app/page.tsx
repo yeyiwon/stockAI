@@ -240,19 +240,27 @@ const handleChat = async (message?: string, mode: string = "basic") => {
   return (
     <main className="min-h-screen w-full bg-black text-white p-4 md:p-8 overflow-y-auto">
       <div className="w-full max-w-5xl mx-auto flex flex-col gap-8">
-        <header className="text-center pt-10">
-          <h1 className="text-7xl font-[800] tracking-tighter text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500">주식</h1>
-        </header>
-
+      <header className="flex justify-between items-center border-b border-gray-800 pb-4 mb-8">
+  {/* 이모지 + 타이틀 */}
+  <div className="flex items-center gap-2">
+    <span className="text-2xl">🔎</span>
+    <h1 className="text-xl font-bold text-white tracking-tight">주식</h1>
+  </div>
+  
+  {/* 지수 정보 */}
+  <div className="flex gap-6 text-sm">
+    <div className="flex items-center gap-2">
+      <span className="text-gray-500">코스피</span>
+      <span className="text-cyan-400 font-mono font-bold">{indices.KOSPI}</span>
+    </div>
+    <div className="flex items-center gap-2">
+      <span className="text-gray-500">코스닥</span>
+      <span className="text-purple-400 font-mono font-bold">{indices.KOSDAQ}</span>
+    </div>
+  </div>
+</header>
 <div className="w-full z-[100] bg-black/80 backdrop-blur-md py-6 border-b border-white/[0.05]">
-<div className="flex gap-8 justify-center py-4 bg-black border-b border-white/10">
-  <div className="text-sm font-mono text-white">
-    KOSPI: <span className="text-cyan-400 font-bold">{indices.KOSPI?.toLocaleString() || '불러오는 중...'}</span>
-  </div>
-  <div className="text-sm font-mono text-white">
-    KOSDAQ: <span className="text-purple-400 font-bold">{indices.KOSDAQ?.toLocaleString() || '불러오는 중...'}</span>
-  </div>
-</div>
+
   
   <div className="relative w-full max-w-lg mx-auto">
     <input 

@@ -14,7 +14,7 @@ app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://stock-ai-22ke.vercel.app/"], # "*" 대신 실제 도메인을 넣으면 더 확실합니다.
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

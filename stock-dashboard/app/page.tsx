@@ -261,27 +261,28 @@ const handleChat = async (message?: string, mode: string = "basic") => {
   };
 
   return (
-    <main className="min-h-screen w-full bg-black text-white p-4 md:p-8 overflow-y-auto">
-      <div className="w-full max-w-5xl mx-auto flex flex-col gap-8">
-      <header className="sticky top-0 z-[50] flex justify-between items-center border-b border-gray-800 pb-4 mb-8">
-  {/* 이모지 + 타이틀 */}
-  <div className="flex items-center gap-2">
-    <span className="text-2xl">🔎</span>
-    <h1 className="text-xl font-bold text-white tracking-tight">주식</h1>
-  </div>
-  
-  {/* 지수 정보 */}
-  <div className="flex gap-6 text-sm">
+    <>
+<header className="sticky top-0 z-[10000] w-full bg-black border-b border-white/10 py-4 px-8">
+  <div className="max-w-5xl mx-auto flex justify-between items-center">
     <div className="flex items-center gap-2">
-      <span className="text-gray-500">KOSPI</span>
-      <span className="text-cyan-400 font-mono font-bold">{indices.KOSPI}</span>
+      <span className="text-2xl">🔎</span>
+      <h1 className="text-xl font-bold text-white tracking-tight">주식</h1>
     </div>
-    <div className="flex items-center gap-2">
-      <span className="text-gray-500">KOSDAQ</span>
-      <span className="text-purple-400 font-mono font-bold">{indices.KOSDAQ}</span>
+    
+    <div className="flex gap-6 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="text-white/50">KOSPI</span>
+        <span className="text-cyan-400 font-mono font-bold">{indices.KOSPI}</span>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-white/50">KOSDAQ</span>
+        <span className="text-purple-400 font-mono font-bold">{indices.KOSDAQ}</span>
+      </div>
     </div>
   </div>
 </header>
+        <main className="min-h-screen w-full bg-black text-white p-4 md:p-8">
+      <div className="w-full max-w-5xl mx-auto flex flex-col gap-8">
 <div className="w-full z-[100] bg-black/80 backdrop-blur-md py-6 border-b border-white/[0.05]">
 
   
@@ -532,5 +533,7 @@ const handleChat = async (message?: string, mode: string = "basic") => {
 )}
       </div>
     </main>
+    </>
+
   );
 }

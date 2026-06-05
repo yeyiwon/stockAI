@@ -193,26 +193,31 @@ def chat_with_ai(data: ChatRequest):
 # 1. 파일 상단 import 아래에 함수 하나만 정의
 @app.get("/indices")
 def get_market_indices():
+    # period를 "5d"로 해서 마지막 데이터가 비어있지 않은 것을 찾도록 수정
     indices = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
     data = {}
+    
     for name, ticker in indices.items():
         try:
-            hist = yf.Ticker(ticker).history(period="5d", timeout=5)
+            # yfinance는 장 마감 직후 불안정할 수 있으므로, 5일치 중 마지막 유효 값을 찾음
+            hist = yf.Ticker(ticker).history(period="5d")
+            
             if not hist.empty and 'Close' in hist:
+                # 마지막 유효한 종가(Close)를 가져옴
                 val = float(hist['Close'].iloc[-1])
-                # NaN 값을 0.0으로 강제 변환
-                if math.isnan(val) or val is None:
-                    data[name] = 0.0
-                else:
-                    data[name] = round(val, 2)
+                
+                # 만약 NaN이라면 직전 값이라도 가져오기
+                if math.isnan(val):
+                    val = float(hist['Close'].iloc[-2])
+                
+                data[name] = round(val, 2)
             else:
                 data[name] = 0.0
         except Exception as e:
-            print(f"Error fetching {name}: {e}")
+            print(f"지수 데이터 수집 실패 ({name}): {e}")
             data[name] = 0.0
-    return data
-
-
+            
+    return clean_nan(data)
 if __name__ == "__main__":
     import uvicorn
     # reload=True를 넣어두면 코드 수정 시 서버가 자동으로 재시작되어 편합니다.

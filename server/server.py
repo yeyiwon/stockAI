@@ -8,6 +8,7 @@ from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 from openai import OpenAI
+import math
 
 load_dotenv()
 app = FastAPI()
@@ -182,13 +183,17 @@ def get_market_indices():
     for name, ticker in indices.items():
         try:
             hist = yf.Ticker(ticker).history(period="5d", timeout=5)
+            # 데이터가 비어있거나 마지막 값이 숫자가 아닐 경우 0으로 처리
             if not hist.empty and 'Close' in hist:
-                data[name] = round(float(hist['Close'].iloc[-1]), 2)
+                val = float(hist['Close'].iloc[-1])
+                # math.isnan을 사용해 NaN 여부 확인 후 안전하게 처리
+                data[name] = 0.0 if math.isnan(val) else round(val, 2)
             else:
                 data[name] = 0.0
         except:
             data[name] = 0.0
     return data
+
 if __name__ == "__main__":
     import uvicorn
     # reload=True를 넣어두면 코드 수정 시 서버가 자동으로 재시작되어 편합니다.

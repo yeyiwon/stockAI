@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 from openai import OpenAI
 
 load_dotenv()
-
 app = FastAPI()
 
 app.add_middleware(
@@ -23,7 +22,7 @@ app.add_middleware(
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# 1. 데이터 로드
+# 1. 공통 데이터 로드 및 유틸리티
 def load_stock_data():
     url = 'http://kind.krx.co.kr/corpgeneral/corpList.do?method=download&searchType=13'
     df = pd.read_html(url, header=0, encoding='euc-kr')[0]
@@ -33,175 +32,161 @@ def load_stock_data():
 
 stock_df = load_stock_data()
 
-# 2. AI 분석 엔진 (핵심: 전문 전략가 페르소나 적용)
-def get_ai_response(name, context):
-    system_prompt = """
-    당신은 10년 차 월스트리트 전문 투자 전략가입니다.
-    답변은 반드시 다음 형식을 지키세요:
-    
-    1. **[핵심 요약]**: 현재 상황을 1~2줄로 요약.
-    2. **[상세 분석]**: 뉴스 데이터와 주가를 연계하여 분석 (• 불렛 포인트 활용).
-    3. **[투자 의견]**: 매수/매도/보류 여부를 논리적 근거와 함께 제시 (리스크 포함).
-    
-    규칙: 
-    - 수치는 반드시 **굵게** 표시하세요.
-    - 문단 사이를 개행하여 시각적으로 읽기 편하게 만드세요.
-    """
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"종목: {name}\n\n데이터 및 질문:\n{context}"}
-        ]
-    )
-    return response.choices[0].message.content
-
-# 3. API 엔드포인트
 @app.get("/search")
-def search(query: str):
-    results = stock_df[stock_df['회사명'].str.contains(query, na=False)].head(10)
-    return {"suggestions": results.to_dict(orient='records')}
-
-@app.get("/analyze")
-def analyze(name: str):
+def search_stock(query: str):
+    # 회사명에 검색어가 포함된 항목들을 모두 찾음
+    matches = stock_df[stock_df['회사명'].str.contains(query, na=False)].copy()
+    # 검색어가 회사명과 일치할수록 위로 오게 간단히 정렬
+    matches['len'] = matches['회사명'].str.len()
+    matches = matches.sort_values(by='len')
+    return {"suggestions": matches.to_dict(orient='records')}
+# 핵심: 내부 로직용 데이터 수집 함수 (엔드포인트가 아님!)
+def get_stock_data_internal(name: str):
     match = stock_df[stock_df['회사명'] == name]
-    if match.empty: 
-        raise HTTPException(status_code=404, detail="종목 없음")
-    
-    code = match.iloc[0]['종목코드']
-    formatted_code = str(code).zfill(6)
-    
-    df = pd.DataFrame()
-    
-    # 3개월(약 90일) 데이터로 설정하여 데이터 안정성 확보
+    if match.empty: return None
+    code = str(match.iloc[0]['종목코드']).zfill(6)
     for suffix in [".KS", ".KQ"]:
-        ticker_symbol = f"{formatted_code}{suffix}"
-        # period="3mo"로 설정하여 최근 데이터 위주로 깔끔하게 확보
-        temp_df = yf.download(ticker_symbol, period="3mo", progress=False)
-        
-        if not temp_df.empty:
-            if isinstance(temp_df.columns, pd.MultiIndex):
-                temp_df.columns = temp_df.columns.get_level_values(0)
-            
-            if 'Close' in temp_df.columns:
-                # 결측치 제거
-                df = temp_df[['Close']].dropna()
-                if not df.empty:
-                    break
-    
-    if df.empty or len(df) < 2:
-        raise HTTPException(status_code=404, detail="차트 데이터를 불러올 수 없습니다.")
-
-    # 차트 데이터 가공
-    chart_data = []
-    for idx, row in df.iterrows():
-        date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
-        chart_data.append({"date": date_str, "price": float(row['Close'])})
-    
-    last_price = float(df['Close'].iloc[-1])
-    prev_price = float(df['Close'].iloc[-2])
-    change_rate = round(((last_price - prev_price) / prev_price) * 100, 2)
-    
-    return {
-        "ticker": name, 
-        "price": last_price, 
-        "change": change_rate, 
-        "chart": chart_data
-    }
+        df = yf.download(f"{code}{suffix}", period="5d", progress=False)
+        if not df.empty:
+            if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
+            last_price = float(df['Close'].iloc[-1])
+            prev_price = float(df['Close'].iloc[-2]) if len(df) > 1 else last_price
+            return {"price": last_price, "change": round(((last_price - prev_price) / prev_price) * 100, 2)}
+    return None
 
 def get_real_news(name):
-
+    match = stock_df[stock_df['회사명'] == name]
+    if match.empty: return []
+    code = match.iloc[0]['종목코드']
+    url = f"https://finance.naver.com/item/news_news.naver?code={code}&page=1"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     try:
-        # 1. 종목코드 조회
-        match = stock_df[stock_df['회사명'] == name]
-        if match.empty:
-            return []
-        
-        code = match.iloc[0]['종목코드']
-        
-        # 2. 뉴스 페이지 요청
-        url = f"https://finance.naver.com/item/news_news.naver?code={code}&page=1"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        
-        response = requests.get(url, headers=headers)
-        response.raise_for_status() # 요청 실패 시 예외 발생
-        
-        # 3. 데이터 파싱
-        soup = BeautifulSoup(response.content, 'html.parser')
+        soup = BeautifulSoup(requests.get(url, headers=headers).content, 'html.parser')
         news_list = []
-        
-        # 네이버 금융 뉴스 테이블 행(.type5 tr) 순회
         for row in soup.select('table.type5 tr'):
             title_tag = row.select_one('.title a')
             date_tag = row.select_one('.date')
-            
             if title_tag and date_tag:
-                news_list.append({
-                    "time": date_tag.text.strip(),
-                    "title": title_tag.text.strip(),
-                    "link": "https://finance.naver.com" + title_tag['href'] # 여기서 'link'라는 이름으로 보냅니다.
-})
-            
-            # 5개만 수집 후 종료
-            if len(news_list) >= 5:
-                break
-                
+                news_list.append({"time": date_tag.text.strip(), "title": title_tag.text.strip()})
+            if len(news_list) >= 5: break
         return news_list
+    except: return []
 
-    except Exception as e:
-        print(f"뉴스 수집 에러: {e}")
-        return []
-
-
-def get_ai_response(name, context):
-    system_prompt = """
-    당신은 10년 차 월스트리트 전문 투자 전략가입니다.
-    답변은 반드시 다음 형식을 지키세요:
+# [수정] AI 응답 함수 내부
+def get_ai_response(name, context, avg_price, mode="basic"):
+    prompts = {
+        "timing": "현재 가격이 저평가 구간인지, 기술적 지표상 지금이 진입하기 좋은 타이밍인지 분석해줘.",
+        "growth": "이 종목의 최근 상승 동력은 무엇이며, 추가 상승 여력이 있는지 핵심 뉴스 중심으로 분석해줘.",
+        "risk_strategy": "종목의 하락 리스크를 진단하고, 손절선과 목표가를 포함한 현실적인 대응 전략을 짜줘."
+    }
     
-    1. **[핵심 요약]**: 현재 상황을 1~2줄로 요약.
-    2. **[상세 분석]**: 뉴스 데이터와 주가를 연계하여 분석 (• 불렛 포인트 활용).
-    3. **[투자 의견]**: 매수/매도/보류 여부를 논리적 근거와 함께 제시 (리스크 포함).
-    
-    규칙: 
-    - 수치는 반드시 **굵게** 표시하세요.
-    - 문단 사이를 개행하여 시각적으로 읽기 편하게 만드세요.
+    system_prompt = f"""
+    당신은 월스트리트 출신 퀀트 투자 전략가입니다.
+    사용자의 평단가: {avg_price}원을 고려해 분석하세요.
+    1. [결론]: '매수 강추 / 매수 고려 / 관망 / 매도' 중 하나를 첫 줄에 배치.
+    2. [핵심 데이터]: 제공된 데이터 중 주가 변화, 뉴스 키워드, 지표를 활용해 이유 설명.
+    3. [언어]: 일반인이 이해하기 쉬운 용어 사용, 중요한 수치는 **굵게** 표시.
     """
+    
+    user_prompt = f"종목명: {name}\n\n[데이터]\n{context}\n\n질문: {prompts.get(mode, '종목 상태를 분석해줘.')}"
+    
     response = client.chat.completions.create(
         model="gpt-4o",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"종목: {name}\n\n데이터 및 질문:\n{context}"}
-        ]
+        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
     )
     return response.choices[0].message.content
 
-@app.get("/news")
-def get_news(name: str):
-    news_list = get_real_news(name)
-    news_titles = "\n".join([f"- {n['title']}" for n in news_list[:3]])
-    summary = get_ai_response(name, f"뉴스 요약 요청:\n{news_titles}")
-    return {"list": news_list, "summary": summary}
+# [수정] 실시간 주가 함수: 캐시 방지 추가
+def get_stock_data_internal(name: str):
+    match = stock_df[stock_df['회사명'] == name]
+    if match.empty: return {"price": 0, "change": 0}
+    code = str(match.iloc[0]['종목코드']).zfill(6)
+    for suffix in [".KS", ".KQ"]:
+        hist = yf.Ticker(f"{code}{suffix}").history(period="1d")
+        if not hist.empty:
+            last = float(hist['Close'].iloc[-1])
+            prev = float(hist['Open'].iloc[0])
+            return {"price": last, "change": round(((last - prev) / prev) * 100, 2)}
+    return {"price": 0, "change": 0}
 
 class ChatRequest(BaseModel):
     name: str
     question: str
+    mode: str = "basic"
+    avg_price: float = 0.0
+    quantity: int = 0  # <--- 이 줄을 추가하세요!
+# [삭제/수정] 파일 하단 엔드포인트 부분을 아래로 통째로 교체하세요.
+
+
+@app.get("/analyze")
+def analyze(name: str):
+    match = stock_df[stock_df['회사명'] == name]
+    if match.empty: raise HTTPException(status_code=404, detail="종목 없음")
+    code = str(match.iloc[0]['종목코드']).zfill(6)
+    
+    # 실시간 시세 데이터 가져오기 (period="1d"로 오늘 데이터만)
+    realtime_data = None
+    for suffix in [".KS", ".KQ"]:
+        ticker = yf.Ticker(f"{code}{suffix}")
+        df = ticker.history(period="1d")
+        if not df.empty:
+            last_price = float(df['Close'].iloc[-1])
+            # 전일 종가(previous_close)와 비교하여 실시간 등락 계산
+            prev_close = ticker.info.get('previousClose', last_price)
+            change = round(((last_price - prev_close) / prev_close) * 100, 2)
+            realtime_data = {"price": last_price, "change": change}
+            break
+            
+    # 차트 데이터 (3개월)
+    chart_df = yf.download(f"{code}.KS" if ".KS" in str(ticker) else f"{code}.KQ", period="3mo", progress=False)
+    if isinstance(chart_df.columns, pd.MultiIndex): chart_df.columns = chart_df.columns.get_level_values(0)
+    
+    chart = [{"date": str(idx.date()), "price": float(row['Close'])} for idx, row in chart_df.iterrows()]
+    
+    return {
+        "ticker": name, 
+        "price": realtime_data['price'], 
+        "change": realtime_data['change'], 
+        "chart": chart
+    }
+
+@app.get("/news")
+def get_news(name: str):
+    return {"news": get_real_news(name)}
 
 @app.post("/chat")
 def chat_with_ai(data: ChatRequest):
     news = get_real_news(data.name)
-    stock_info = analyze(data.name)
+    stock_info = get_stock_data_internal(data.name)
+    market = get_market_indices() # 이미 안전하게 정의된 함수 사용
     
-    news_context = "\n".join([f"- {n['title']}" for n in news[:3]])
-    context = f"현재가: {stock_info['price']}원\n뉴스:\n{news_context}\n\n질문: {data.question}"
-    
-    answer = get_ai_response(data.name, context)
-    return {"answer": answer}
+    news_str = "\n".join([f"- {n['title']}" for n in news[:3]])
+    context = f"""
+    [시장 지표] 코스피: {market.get('KOSPI')}, 코스닥: {market.get('KOSDAQ')}
+    [사용자 포트폴리오] 평단가: {data.avg_price}원, 보유수량: {data.quantity}주
+    [종목 정보] 현재가: {stock_info.get('price')}원, 등락률: {stock_info.get('change')}%
+    [최신 뉴스] {news_str}
+    [사용자 질문] {data.question}
+    """
+    return {"answer": get_ai_response(data.name, context, mode=data.mode, avg_price=data.avg_price)}
 
-# 파일 맨 마지막에 추가
+# 단일 엔드포인트로 정리 (중복 제거)
+# 1. 파일 상단 import 아래에 함수 하나만 정의
+@app.get("/indices")
+def get_market_indices():
+    indices = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11"}
+    data = {}
+    for name, ticker in indices.items():
+        try:
+            hist = yf.Ticker(ticker).history(period="5d", timeout=5)
+            if not hist.empty and 'Close' in hist:
+                data[name] = round(float(hist['Close'].iloc[-1]), 2)
+            else:
+                data[name] = 0.0
+        except:
+            data[name] = 0.0
+    return data
 if __name__ == "__main__":
     import uvicorn
-    # 환경 변수 PORT를 읽어오고, 없으면 8000번 사용
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    # reload=True를 넣어두면 코드 수정 시 서버가 자동으로 재시작되어 편합니다.
+    uvicorn.run(app, host="0.0.0.0", port=8000)

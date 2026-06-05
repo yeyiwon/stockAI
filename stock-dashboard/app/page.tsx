@@ -37,7 +37,7 @@ const API_BASE_URL = 'http://127.0.0.1:8000';
 export default function Home() {
   const [ticker, setTicker] = useState<string>('');
   const [result, setResult] = useState<StockResult | null>(null);
-  const [news, setNews] = useState<NewsResult | null>(null); 
+
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [recentSearches, setRecentSearches] = useState<string[]>([]);
   const [selectedIndex, setSelectedIndex] = useState<number>(-1);
@@ -47,8 +47,8 @@ export default function Home() {
   const [chatResponse, setChatResponse] = useState<string>('');
   const [isLoadingChat, setIsLoadingChat] = useState<boolean>(false);
   const [messages, setMessages] = useState<{sender: 'user' | 'ai', text: string}[]>([]);
-  const [newsList, setNewsList] = useState<NewsItem[]>([]);
-  const [newsSummary, setNewsSummary] = useState<string>('');
+  const [portfolio, setPortfolio] = useState({ avgPrice: 0, quantity: 0 });
+  const [indices, setIndices] = useState({ KOSPI: 0, KOSDAQ: 0 });
   // 컴포넌트 내부 상단에 추가
 const chartScrollRef = useRef<HTMLDivElement>(null);
 
@@ -58,6 +58,15 @@ useLayoutEffect(() => {
     chartScrollRef.current.scrollLeft = chartScrollRef.current.scrollWidth;
   }
 }, [result?.chart]);
+
+const saveRecentSearch = (name: string) => {
+  setRecentSearches(prev => {
+    const updated = [name, ...prev.filter(s => s !== name)].slice(0, 5);
+    localStorage.setItem('recent', JSON.stringify(updated));
+    return updated;
+  });
+};
+
 
 // 스크롤 시 범위 업데이트하는 함수
 const handleChartScroll = (e: React.UIEvent<HTMLDivElement>) => {
@@ -78,11 +87,44 @@ const handleChartScroll = (e: React.UIEvent<HTMLDivElement>) => {
   useEffect(() => {
     const saved = localStorage.getItem('recent');
     if (saved) {
-      try { setRecentSearches(JSON.parse(saved)); } catch (e) { console.error(e); }
+      try {
+        const parsed = JSON.parse(saved);
+        setTimeout(() => setRecentSearches(parsed), 0); // Defer state update
+      } catch (e) {
+        console.error(e);
+      }
     }
   }, []);
 
+  useEffect(() => {
+    const updateData = async () => {
+      try {
+        // 1. 지수 갱신 (서버 응답을 기다리고 확인)
+        const resIdx = await fetch(`${API_BASE_URL}/indices`);
+        if (resIdx.ok) {
+          const dataIdx = await resIdx.json();
+          if (dataIdx && typeof dataIdx === 'object') {
+            setIndices(dataIdx);
+          }
+        }
   
+        // 2. 종목 주가 갱신
+        if (ticker) {
+          const resStock = await fetch(`${API_BASE_URL}/analyze?name=${encodeURIComponent(ticker)}`);
+          if (resStock.ok) {
+            const dataStock = await resStock.json();
+            setResult(dataStock);
+          }
+        }
+      } catch (e) {
+        console.error("실시간 데이터 갱신 에러:", e);
+      }
+    };
+  
+    updateData();
+    const interval = setInterval(updateData, 5000);
+    return () => clearInterval(interval);
+  }, [ticker]);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
@@ -121,27 +163,26 @@ const handleAnalyze = async (name: string): Promise<void> => {
   setMessages([]);
   setSuggestions([]);
 
+  // 1. 데이터 호출 성공 여부와 상관없이 무조건 기록 남기기
+  const updated = [name, ...recentSearches.filter(s => s !== name)].slice(0, 5);
+  setRecentSearches(updated);
+  localStorage.setItem('recent', JSON.stringify(updated));
+
   try {
     const [chartRes, newsRes] = await Promise.all([
       fetch(`${API_BASE_URL}/analyze?name=${encodeURIComponent(name)}`),
       fetch(`${API_BASE_URL}/news?name=${encodeURIComponent(name)}`)
     ]);
 
-    if (!chartRes.ok || !newsRes.ok) throw new Error("데이터 호출 실패");
+    // 2. 여기서 던지는 에러를 잡기 위해 수정
+    if (!chartRes.ok) {
+        console.error("서버 응답 오류:", chartRes.status);
+        alert(`데이터를 찾을 수 없습니다 (상태코드: ${chartRes.status})`);
+        return; // 에러 발생 시 여기서 함수 종료 (throw 대신 return)
+    }
 
-    // 타입 캐스팅 대신 명확한 결과 받기
     const chartData: StockResult = await chartRes.json();
-    const newsData: NewsResult = await newsRes.json();
-
-    setResult(chartData);
-    setNewsList(newsData.list);
-    setNewsSummary(newsData.summary);
-    
-    setMessages([{ sender: 'ai', text: newsData.summary }]);
-
-    const updated = [name, ...recentSearches.filter(s => s !== name)].slice(0, 5);
-    setRecentSearches(updated);
-    localStorage.setItem('recent', JSON.stringify(updated));
+    setResult(chartData); 
     
   } catch (e) {
     console.error("분석 실패", e);
@@ -150,31 +191,40 @@ const handleAnalyze = async (name: string): Promise<void> => {
   }
 };
   
-  const handleChat = async () => {
-    if (!chatInput.trim() || !result) return;
-    
-    // 1. 사용자 메시지 추가 (모션 트리거를 위해)
-    const newUserMessage = { sender: 'user' as const, text: chatInput };
-    setMessages(prev => [...prev, newUserMessage]);
-    setChatInput('');
-    setIsLoadingChat(true);
+const handleChat = async (message?: string, mode: string = "basic") => {
+  const input = message || chatInput;
+  if (!input.trim() || !result) return;
   
-    try {
-      const res = await fetch(`${API_BASE_URL}/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: result.ticker, question: chatInput }),
-      });
-      const data = await res.json();
-      
-      // 2. AI 응답 추가
-      setMessages(prev => [...prev, { sender: 'ai', text: data.answer }]);
-    } catch (e) {
-      console.error("AI 채팅 실패", e);
-    } finally {
-      setIsLoadingChat(false);
+  setIsLoadingChat(true);
+  try {
+    const url = `${API_BASE_URL}/chat`;
+    console.log("요청 보내는 중:", url, "데이터:", { name: result.ticker, question: input });
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        name: result.ticker, 
+        question: input,
+        mode: mode,
+        avg_price: portfolio.avgPrice 
+      }),
+    });
+    
+    if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`서버 응답 오류: ${res.status} - ${errorText}`);
     }
-  };
+    
+    const data = await res.json();
+    setMessages(prev => [...prev, { sender: 'ai', text: data.answer }]);
+  } catch (e) {
+    console.error("AI 채팅 실패 상세 내용:", e); // 여기서 정확한 에러 확인 가능
+    setMessages(prev => [...prev, { sender: 'ai', text: "연결 오류입니다. 서버를 확인해주세요." }]);
+  } finally {
+    setIsLoadingChat(false);
+  }
+};
 
   const removeRecentItem = (itemToRemove: string) => {
     const updated = recentSearches.filter(s => s !== itemToRemove);
@@ -196,6 +246,15 @@ const handleAnalyze = async (name: string): Promise<void> => {
         </header>
 
 <div className="w-full z-[100] bg-black/80 backdrop-blur-md py-6 border-b border-white/[0.05]">
+<div className="flex gap-8 justify-center py-4 bg-black border-b border-white/10">
+  <div className="text-sm font-mono text-white">
+    KOSPI: <span className="text-cyan-400 font-bold">{indices.KOSPI?.toLocaleString() || '불러오는 중...'}</span>
+  </div>
+  <div className="text-sm font-mono text-white">
+    KOSDAQ: <span className="text-purple-400 font-bold">{indices.KOSDAQ?.toLocaleString() || '불러오는 중...'}</span>
+  </div>
+</div>
+  
   <div className="relative w-full max-w-lg mx-auto">
     <input 
       value={ticker} 
@@ -205,20 +264,20 @@ const handleAnalyze = async (name: string): Promise<void> => {
       placeholder="종목 검색..." 
     />
     
-    {/* 검색 제안 리스트 */}
     {suggestions.length > 0 && (
-      <div className="absolute w-full mt-2 bg-neutral-900 rounded-2xl p-2 border border-white/10 shadow-2xl">
-        {suggestions.map((s, idx) => (
-          <div 
-            key={idx} 
-            onClick={() => handleAnalyze(s.회사명)} 
-            className={`px-4 py-3 cursor-pointer rounded-xl transition ${idx === selectedIndex ? 'bg-cyan-500/20' : 'hover:bg-cyan-500/10'}`}
-          >
-            {s.회사명}
-          </div>
-        ))}
+  <div className="absolute w-full mt-2 bg-neutral-900 rounded-2xl p-2 border border-white/10 shadow-2xl z-[9999] max-h-[300px] overflow-y-auto scrollbar-thin">
+    {suggestions.map((s, idx) => (
+      <div 
+        key={idx} 
+        onClick={() => handleAnalyze(s.회사명)} 
+        className={`px-4 py-3 cursor-pointer rounded-xl transition ${idx === selectedIndex ? 'bg-cyan-500/20 text-cyan-400' : 'hover:bg-neutral-800'}`}
+      >
+        <span className="font-bold">{s.회사명}</span>
+        <span className="text-neutral-500 text-[10px] ml-2">{s.종목코드}</span>
       </div>
-    )}
+    ))}
+  </div>
+)}
 
     {/* 검색 기록 */}
     <div className="flex gap-2 justify-center mt-4 flex-wrap items-center">
@@ -249,9 +308,9 @@ const handleAnalyze = async (name: string): Promise<void> => {
           <div className="w-[1px] h-4 bg-white/10 mx-2" />
           <button 
             onClick={clearRecent} 
-            className="text-[10px] text-neutral-700 hover:text-neutral-400 uppercase tracking-[0.1em] transition-colors"
+            className="text-[12px] text-neutral-300 hover:text-neutral-400 uppercase tracking-[0.1em] transition-colors"
           >
-            Clear All
+            검색 기록 삭제
           </button>
         </>
       )}
@@ -264,7 +323,7 @@ const handleAnalyze = async (name: string): Promise<void> => {
     {/* 좌측: 차트 영역 */}
     <div className="lg:col-span-2 bg-[#111111] p-8 rounded-3xl border border-white/[0.05]">
         <div className="mb-8">
-          <h2 className="text-[10px] font-bold text-neutral-600 uppercase tracking-[0.2em] mb-2">{result?.ticker}</h2>
+          <h2 className=" font-bold text-neutral-300 uppercase tracking-[0.2em] mb-2">{result?.ticker}</h2>
           <div className="flex items-center gap-4">
             <span className="text-4xl font-bold tracking-tight text-white">{result?.price.toLocaleString()}</span>
             <span className="text-sm font-semibold text-neutral-500">KRW</span>
@@ -337,58 +396,84 @@ const handleAnalyze = async (name: string): Promise<void> => {
           </div>
         </div>
       </div>
-      <div className="bg-[#111111] p-6 rounded-3xl border border-white/[0.1] flex flex-col h-[700px]">
-  <h3 className="text-cyan-400 text-[12px] font-bold tracking-[0.1em] mb-6">시장 분석 정보</h3>
-  
-  {/* 분석 및 뉴스 컨테이너 (스크롤 가능) */}
-  <div className="flex-grow overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/10 space-y-8">
-    
-    {/* 1. 관련 뉴스 (가장 위) */}
-    {newsList.length > 0 && (
-      <div className="space-y-3">
-        <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest">최신 관련 뉴스</h4>
-        {newsList.map((n, idx) => (
-          <a key={idx} href={n.link} target="_blank" rel="noreferrer" className="block p-3 rounded-xl bg-[#1a1a1a] hover:bg-[#222] transition-colors border border-white/5">
-            <p className="text-[12px] text-white font-medium line-clamp-2">{n.title}</p>
-          </a>
-        ))}
+
+      <div className="bg-[#111111] p-6 rounded-3xl border border-white/[0.08] flex flex-col h-[750px] shadow-2xl">
+  {/* 헤더 */}
+  <div className="flex justify-between items-start mb-6">
+    <div>
+      <h2 className="text-white text-xl font-bold">{ticker}</h2>
+      <p className="text-cyan-400 text-[10px] font-bold tracking-[0.2em] mt-1">QUANT ANALYSIS</p>
+    </div>
+    <div className="text-right">
+      <div className="text-white text-lg font-mono font-bold">{result?.price.toLocaleString()}원</div>
+      <div className={`text-[12px] font-bold ${result?.change >= 0 ? 'text-red-400' : 'text-blue-400'}`}>
+        {result?.change >= 0 ? '+' : ''}{result?.change}%
       </div>
-    )}
-
-    {/* 2. 채팅 및 AI 요약 통합 영역 */}
-    <div className="space-y-4 pt-4 border-t border-white/5">
-      <h4 className="text-[10px] font-bold text-neutral-500 uppercase tracking-widest mb-2">분석 및 대화</h4>
-      
-      {/* 초기 AI 요약본 */}
-      {newsSummary && messages.length === 0 && (
-        <div className="bg-white/[0.03] p-4 rounded-xl border border-white/[0.05]">
-          <p className="text-[13px] text-neutral-300 leading-relaxed whitespace-pre-line">{newsSummary}</p>
-        </div>
-      )}
-
-      {/* 대화 기록 */}
-      {messages.map((msg, i) => (
-        <div key={i} className={`text-[13px] leading-relaxed p-3 rounded-xl ${msg.sender === 'ai' ? 'bg-white/5 text-neutral-200' : 'bg-cyan-500/10 text-cyan-100 ml-8'}`}>
-          {msg.text}
-        </div>
-      ))}
-      
-      {/* 로딩 표시기 */}
-      {isLoadingChat && <div className="text-[12px] text-neutral-600 animate-pulse pl-2">AI가 답변을 생성 중입니다...</div>}
-      <div ref={chatEndRef} />
+      <button onClick={() => handleAnalyze(ticker)} className="text-[10px] text-white/30 hover:text-cyan-400 mt-1 transition-colors">데이터 초기화 ↻</button>
     </div>
   </div>
 
-  {/* 하단 입력창 */}
-  <div className="mt-4 pt-4 border-t border-white/[0.05]">
-    <input 
-      value={chatInput} 
-      onChange={(e) => setChatInput(e.target.value)}
-      onKeyDown={(e) => { if (e.key === 'Enter') handleChat(); }}
-      placeholder="전략이나 궁금한 점을 물어보세요..."
-      className="w-full bg-[#050505] border border-white/10 rounded-xl px-4 py-3.5 text-[14px] focus:border-cyan-500/50 outline-none transition-all"
-    />
-  </div>
+  {ticker && (
+    <div className="flex flex-col flex-grow min-h-0">
+      {/* 채팅창: 슬림한 메시지 UI */}
+      <div className="flex-grow overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/5 space-y-6 pb-4">
+        {messages.map((msg, i) => (
+          <div key={i} className={`flex ${msg.sender === 'ai' ? 'justify-start' : 'justify-end'}`}>
+            <div className={`max-w-[70%] text-[13px] leading-relaxed p-4 rounded-xl border ${
+              msg.sender === 'ai' 
+                ? 'bg-[#111111] text-neutral-300 border-white/[0.05]' 
+                : 'bg-cyan-500/10 text-cyan-100 border-cyan-500/30' // 슬림하고 색상 통일
+            }`}>
+              <div className="whitespace-pre-wrap">{msg.text}</div>
+            </div>
+          </div>
+        ))}
+        <div ref={chatEndRef} />
+      </div>
+
+      {/* 평단가 입력부 */}
+      <div className="flex gap-2 mb-3 pt-4 border-t border-white/[0.05]">
+        <input 
+          type="number" 
+          value={portfolio.avgPrice || ''}
+          placeholder="평단가 입력" 
+          className="flex-grow bg-[#050505] border border-white/10 rounded-lg px-3 py-2 text-[12px] text-white outline-none focus:border-cyan-500 [appearance:textfield]"
+          onChange={(e) => setPortfolio({...portfolio, avgPrice: Number(e.target.value)})}
+        />
+        <button onClick={() => setPortfolio({...portfolio, avgPrice: result?.price || 0})} className="px-4 border border-cyan-500/50 text-[11px] text-cyan-400 rounded-lg bg-cyan-500/10 hover:bg-cyan-500 hover:text-white transition-all font-bold">현재가 적용</button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-1.5 pb-3">
+  {[
+    { label: "매수 전략", q: "현재가 기준 매수 적정성 분석해줘. 손절라인과 목표수익률을 수치로 제시해.", m: "timing" },
+    { label: "매도 전략", q: "내 평단가와 비교해서 현재 익절/손절 전략을 세워줘. 매도 타이밍은 언제로 봐?", m: "exit" },
+    { label: "뉴스/이슈", q: "최신 뉴스 3개를 요약하고, 이게 주가 변동성에 미칠 영향을 분석해줘.", m: "news" },
+    { label: "기술 지표", q: "RSI, 이동평균선 등 기술적 지표를 기반으로 단기 추세를 분석해줘.", m: "tech" },
+    { label: "적정 주가", q: "현재 기업 가치와 재무지표를 감안한 적정 주가를 추정해줘.", m: "price" },
+    { label: "위험 요인", q: "현재 이 종목의 잠재적 리스크(매출, 업황 등)를 3가지 짚어줘.", m: "finance" }
+  ].map((btn) => (
+    <button 
+      key={btn.label} 
+      onClick={() => {
+        setMessages(prev => [...prev, { text: btn.label, sender: 'user' }]); 
+        handleChat(btn.q, btn.m); 
+      }} 
+      className="py-2 rounded-lg border border-white/10 text-white/50 text-[11px] hover:border-cyan-500/50 hover:bg-cyan-500/10 hover:text-cyan-400 transition-all"
+    >
+      {btn.label}
+    </button>
+  ))}
+</div>
+
+      <input 
+        value={chatInput} 
+        onChange={(e) => setChatInput(e.target.value)}
+        onKeyDown={(e) => { if (e.key === 'Enter') handleChat(); }}
+        placeholder="직접 질문하기..."
+        className="w-full bg-[#050505] border border-white/10 rounded-xl px-4 py-3 text-[13px] text-white outline-none focus:border-cyan-500"
+      />
+    </div>
+  )}
 </div>
   </div>
 )}

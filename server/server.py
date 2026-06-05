@@ -11,6 +11,15 @@ from openai import OpenAI
 import math
 import numpy as np  # 파일 상단에 추가 (이미 있다면 생략)
 
+def clean_nan(data):
+    if isinstance(data, dict):
+        return {k: clean_nan(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [clean_nan(v) for v in data]
+    elif isinstance(data, float) and (math.isnan(data) or math.isinf(data)):
+        return 0.0
+    return data
+
 load_dotenv()
 app = FastAPI()
 
@@ -148,12 +157,13 @@ def analyze(name: str):
     
     chart = [{"date": str(idx.date()), "price": float(row['Close'])} for idx, row in chart_df.iterrows()]
     
-    return {
+    result = {
         "ticker": name, 
         "price": realtime_data['price'], 
         "change": realtime_data['change'], 
         "chart": chart
     }
+    return clean_nan(result)
 
 @app.get("/news")
 def get_news(name: str):
@@ -163,7 +173,7 @@ def get_news(name: str):
 def chat_with_ai(data: ChatRequest):
     news = get_real_news(data.name)
     stock_info = get_stock_data_internal(data.name)
-    market = get_market_indices() # 이미 안전하게 정의된 함수 사용
+    market = get_market_indices()
     
     news_str = "\n".join([f"- {n['title']}" for n in news[:3]])
     context = f"""
@@ -173,8 +183,12 @@ def chat_with_ai(data: ChatRequest):
     [최신 뉴스] {news_str}
     [사용자 질문] {data.question}
     """
-    return {"answer": get_ai_response(data.name, context, mode=data.mode, avg_price=data.avg_price)}
-
+    
+    # AI 응답 생성
+    answer_text = get_ai_response(data.name, context, mode=data.mode, avg_price=data.avg_price)
+    
+    # clean_nan을 거쳐서 안전하게 반환
+    return clean_nan({"answer": answer_text})
 # 단일 엔드포인트로 정리 (중복 제거)
 # 1. 파일 상단 import 아래에 함수 하나만 정의
 @app.get("/indices")
@@ -197,6 +211,8 @@ def get_market_indices():
             print(f"Error fetching {name}: {e}")
             data[name] = 0.0
     return data
+
+
 if __name__ == "__main__":
     import uvicorn
     # reload=True를 넣어두면 코드 수정 시 서버가 자동으로 재시작되어 편합니다.

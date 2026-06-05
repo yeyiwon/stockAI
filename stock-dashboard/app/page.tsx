@@ -50,6 +50,7 @@ export default function Home() {
   const [indices, setIndices] = useState({ KOSPI: 0, KOSDAQ: 0 });
   // 컴포넌트 내부 상단에 추가
 const chartScrollRef = useRef<HTMLDivElement>(null);
+const chatContainerRef = useRef<HTMLDivElement>(null);
 
 // 데이터가 로드될 때마다 오른쪽 끝으로 이동시키는 로직
 useLayoutEffect(() => {
@@ -57,6 +58,19 @@ useLayoutEffect(() => {
     chartScrollRef.current.scrollLeft = chartScrollRef.current.scrollWidth;
   }
 }, [result?.chart]);
+
+// 기존의 useEffect를 삭제하고 아래 코드로 교체
+useLayoutEffect(() => {
+  if (messages.length === 0) {
+    // 종목 변경 시 강제로 최상단 이동
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTop = 0;
+    }
+  } else {
+    // 메시지 추가 시에만 부드럽게 하단으로
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }
+}, [messages]);
 
 const saveRecentSearch = (name: string) => {
   setRecentSearches(prev => {
@@ -154,6 +168,7 @@ useEffect(() => {
   chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
 }, [messages]);
 
+
 const handleAnalyze = async (name: string): Promise<void> => {
   if (isLoading) return;
 
@@ -194,11 +209,18 @@ const handleChat = async (message?: string, mode: string = "basic") => {
   const input = message || chatInput;
   if (!input.trim() || !result) return;
   
+  // 1. 내가 입력한 질문을 채팅창에 즉시 추가 (필수!)
+  setMessages(prev => [...prev, { sender: 'user', text: input }]);
+  
+  // 2. 입력창 초기화 (직접 입력한 경우에만)
+  if (!message) {
+    setChatInput("");
+  }
+
   setIsLoadingChat(true);
   try {
     const url = `${API_BASE_URL}/chat`;
-    console.log("요청 보내는 중:", url, "데이터:", { name: result.ticker, question: input });
-
+    
     const res = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -216,9 +238,10 @@ const handleChat = async (message?: string, mode: string = "basic") => {
     }
     
     const data = await res.json();
+    // 3. AI 응답 추가
     setMessages(prev => [...prev, { sender: 'ai', text: data.answer }]);
   } catch (e) {
-    console.error("AI 채팅 실패 상세 내용:", e); // 여기서 정확한 에러 확인 가능
+    console.error("AI 채팅 실패 상세 내용:", e);
     setMessages(prev => [...prev, { sender: 'ai', text: "연결 오류입니다. 서버를 확인해주세요." }]);
   } finally {
     setIsLoadingChat(false);
@@ -240,7 +263,7 @@ const handleChat = async (message?: string, mode: string = "basic") => {
   return (
     <main className="min-h-screen w-full bg-black text-white p-4 md:p-8 overflow-y-auto">
       <div className="w-full max-w-5xl mx-auto flex flex-col gap-8">
-      <header className="flex justify-between items-center border-b border-gray-800 pb-4 mb-8">
+      <header className="sticky top-0 z-[50] flex justify-between items-center border-b border-gray-800 pb-4 mb-8">
   {/* 이모지 + 타이틀 */}
   <div className="flex items-center gap-2">
     <span className="text-2xl">🔎</span>
@@ -250,11 +273,11 @@ const handleChat = async (message?: string, mode: string = "basic") => {
   {/* 지수 정보 */}
   <div className="flex gap-6 text-sm">
     <div className="flex items-center gap-2">
-      <span className="text-gray-500">코스피</span>
+      <span className="text-gray-500">KOSPI</span>
       <span className="text-cyan-400 font-mono font-bold">{indices.KOSPI}</span>
     </div>
     <div className="flex items-center gap-2">
-      <span className="text-gray-500">코스닥</span>
+      <span className="text-gray-500">KOSDAQ</span>
       <span className="text-purple-400 font-mono font-bold">{indices.KOSDAQ}</span>
     </div>
   </div>
@@ -423,7 +446,7 @@ const handleChat = async (message?: string, mode: string = "basic") => {
   {ticker && (
     <div className="flex flex-col flex-grow min-h-0">
       {/* 채팅창: 슬림한 메시지 UI */}
-      <div className="flex-grow overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/5 space-y-6 pb-4">
+      <div ref={chatContainerRef} className="flex-grow overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/5 space-y-6 pb-4">
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.sender === 'ai' ? 'justify-start' : 'justify-end'}`}>
             <div className={`max-w-[70%] text-[13px] leading-relaxed p-4 rounded-xl border ${
@@ -435,6 +458,14 @@ const handleChat = async (message?: string, mode: string = "basic") => {
             </div>
           </div>
         ))}
+        {/* 로딩 인디케이터: AI가 답변 생성 중일 때만 표시 */}
+  {isLoadingChat && (
+    <div className="flex justify-start animate-pulse">
+      <div className="bg-[#111111] text-cyan-400 text-[11px] px-4 py-2 rounded-xl border border-cyan-500/20">
+        생각 중...
+      </div>
+    </div>
+  )}
         <div ref={chatEndRef} />
       </div>
 
@@ -472,13 +503,28 @@ const handleChat = async (message?: string, mode: string = "basic") => {
   ))}
 </div>
 
-      <input 
-        value={chatInput} 
-        onChange={(e) => setChatInput(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') handleChat(); }}
-        placeholder="직접 질문하기..."
-        className="w-full bg-[#050505] border border-white/10 rounded-xl px-4 py-3 text-[13px] text-white outline-none focus:border-cyan-500"
-      />
+{/* 전송 버튼이 포함된 입력창 영역 */}
+<div className="relative flex items-center w-full mt-2">
+  <input 
+    value={chatInput} 
+    onChange={(e) => setChatInput(e.target.value)}
+    onKeyDown={(e) => { if (e.key === 'Enter') handleChat(); }}
+    placeholder="직접 질문하기..."
+    className="w-full bg-[#050505] border border-white/10 rounded-xl px-4 py-3 pr-12 text-[13px] text-white outline-none focus:border-cyan-500"
+    style={{ fontSize: '16px' }} // 모바일 확대 방지
+  />
+  
+  {/* 전송 버튼 */}
+  <button 
+    onClick={() => handleChat()}
+    className="absolute right-2 p-2 text-cyan-400 hover:text-white transition-colors"
+    aria-label="전송"
+  >
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+      <path d="M10.894 2.553a1 1 0 00-1.788 0l-7 14a1 1 0 001.169 1.409l5-1.429A1 1 0 009 15.571V11a1 1 0 112 0v4.571a1 1 0 00.725.962l5 1.429a1 1 0 001.169-1.409l-7-14z" />
+    </svg>
+  </button>
+</div>
     </div>
   )}
 </div>
